@@ -14,6 +14,7 @@ library(p8105.datasets)
 set.seed(1)
 ```
 
+## Model Fitting 
 ```{r}
 data("nyc_airbnb")
 
@@ -27,27 +28,35 @@ nyc_airbnb =
   select(price, stars, boro, neighborhood, room_type)
 ```
 
-Consider price as an outcome that may depend on rating and borough. We fit that initial model in the following code.
+Price predicted by rating and borough.
 ```{r}
-##outcome = price
-##predictors = stars and boro
-fit = lm(price ~ stars + boro, data = nyc_airbnb)
-fit
-##boro is categorical.  R makes it a factor, and default orders alphabetically. In the model above the bronx is the reference group. 
-```
 
+fit = lm(price ~ stars + boro, data = nyc_airbnb)
+
+```
+In the model above, boro is categorical.  R makes categorical variables a factor, and the default ordering is alphabetical. This makes the bronx the reference group. 
+
+## Tidying Output
+
+To look at the output of the models you can use the code below:
 ```{r}
 ##gives additional information on fit, more than just "fit"
 summary(fit)
+
 
 ##extract coefficients
 coef(fit)
 summary(fit)$coef
 
+## fitted.values(fit)
+## The one above gives a really long output!
 ```
 
-Tidy results
+To make the results more presentable you can tidy them.  The functions below also produce data frames, which makes it straightforward to include the results in subsequent steps.
 ```{r}
+fit %>% 
+  broom::glance() 
+
 fit %>% 
   broom::tidy() %>% 
   ##code below tidys up "term" var for showing results
@@ -55,7 +64,7 @@ fit %>%
   knitr::kable(digits = 3)
 ```
 
-##Take a look at factors
+Reordering Factors: 
 ```{r}
 nyc_airbnb = 
   nyc_airbnb %>% 
@@ -77,10 +86,9 @@ fit %>%
   broom::glance()
 ```
 
-##Diagnostics
+## Diagnostics
+The modelr package can be used to add residuals and fitted values to a dataframe. 
 ```{r}
-##spits out dataframes that are ammenable to other things that we want to do
-##adds residuals so that you can plot them
 modelr::add_residuals(nyc_airbnb, fit) %>% 
   ggplot(aes(x = boro, y = resid)) +
   geom_violin() +
@@ -96,17 +104,66 @@ modelr::add_residuals(nyc_airbnb, fit) %>%
 modelr::add_predictions(nyc_airbnb, fit)
 ```
 
-##Hypothesis testing
+## Hypothesis testing
+
+Fit a basic and more complex model, then compare the outcomes using an ANOVA. 
+ONLY WORKS FOR NESTED MODELS.
 ```{r}
-##fitting a null and alternative hypthesis
-##skipped over in class, maybe too detailed for what we need, but it does exist
 fit_null = lm(price ~ stars + boro, data = nyc_airbnb)
 fit_alt = lm(price ~ stars + boro + room_type, data = nyc_airbnb)
 ```
 
-##Nesting
 ```{r}
-##fitting an interaction terms]
+anova(fit_null, fit_alt) %>% 
+  broom::tidy()
+```
+
+## Nesting Data
+Fitting models to datasets nested within variables – meaning, we’ll use nest to create a list column containing datasets and fit separate models to each.
+```{r}
+nyc_airbnb %>% 
+  lm(price ~ stars * boro + room_type * boro, data = .) %>% 
+  broom::tidy() %>% 
+  knitr::kable(digits = 3)
+```
+
+We can nest within boroughs and fit borough-specific models associating price with rating and room type:
+```{r}
+nest_lm_res =
+  nyc_airbnb %>% 
+  nest(data = -boro) %>% 
+  mutate(models = map(data, ~lm(price ~ stars + room_type, data = .x)),
+         models = map(models, broom::tidy)) %>% 
+  select(-data) %>% 
+  unnest(models)
+
+nest_lm_res %>% 
+  select(boro, term, estimate) %>% 
+  mutate(term = fct_inorder(term)) %>% 
+  pivot_wider(
+    names_from = term, values_from = estimate) %>% 
+  knitr::kable(digits = 3)
+```
+
+Fitting models to nested datasets is a way of performing stratified analyses. These have a tradeoff: stratified models make it easy to interpret covariate effects in each stratum, but don’t provide a mechanism for assessing the significance of differences across strata.
+
+Fitting model for Manhattan only
+```{r}
+manhattan_airbnb =
+  nyc_airbnb %>% 
+  filter(boro == "Manhattan")
+
+manhattan_nest_lm_res =
+  manhattan_airbnb %>% 
+  nest(data = -neighborhood) %>% 
+  mutate(models = map(data, ~lm(price ~ stars + room_type, data = .x)),
+         models = map(models, broom::tidy)) %>% 
+  select(-data) %>% 
+  unnest(models)
+```
+
+```{r}
+##fitting an interaction terms
 fit_interaction = lm(price ~ stars * boro + room_type * boro, data = nyc_airbnb)
 
 fit_interaction %>%
@@ -125,21 +182,6 @@ nyc_airbnb %>%
   broom::tidy()
 ```
 
-Lets try to map instead
-```{r}
-manhattan_airbnb =
-  nyc_airbnb %>% 
-  filter(boro == "Manhattan")
-
-manhattan_nest_lm_res =
-  manhattan_airbnb %>% 
-  nest(data = -neighborhood) %>% 
-  mutate(models = map(data, ~lm(price ~ stars + room_type, data = .x)),
-         models = map(models, broom::tidy)) %>% 
-  select(-data) %>% 
-  unnest(models)
-```
-
 Nesting neighborhoods
 ```{r}
 manhattan_nest_lm_res %>% 
@@ -153,16 +195,3 @@ manhattan_nest_lm_res %>%
 
 Nesting works in some ways and not in others. If you are going to do a formal analysis a mixed model would work better, but we are not going to cover that now. 
 Can fit things with binary outcomes instead of continuous. 
-
-
-
-
-
-
-
-
-
-
-
-
-

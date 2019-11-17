@@ -29,9 +29,13 @@ nonlin_df %>%
 
 ```
 
+Training and testing
 Using anti-join
 ```{r}
+##creating a training df, with 80% of the observations
 train_df = sample_n(nonlin_df, 80)
+
+##creating a testing df, taking everything that was leftover from the training dataset,
 test_df = anti_join(nonlin_df, train_df, by = "id")
 
 ggplot(train_df, aes(x = x, y = y)) + 
@@ -39,3 +43,149 @@ ggplot(train_df, aes(x = x, y = y)) +
   geom_point(data = test_df, color = "red")
 ```
 
+Fit 3 models of varying goodness
+```{r}
+linear_mod = lm(y ~ x, data = train_df)
+##~s allows x to be smooth
+smooth_mod = mgcv::gam(y ~ s(x), data = train_df)
+##adding in extra stuff to make the foe not work
+wiggly_mod = mgcv::gam(y ~ s(x, k = 30), sp = 10e-6, data = train_df)
+
+```
+
+Let's look at some fits
+```{r}
+train_df %>% 
+  add_predictions(linear_mod) %>% 
+  ggplot(aes(x = x, y = y)) + 
+  geom_point() + 
+  geom_line(aes(y = pred), color = "red")
+
+train_df %>% 
+  add_predictions(smooth_mod) %>% 
+  ggplot(aes(x = x, y = y)) + 
+  geom_point() + 
+  geom_line(aes(y = pred), color = "red")
+
+train_df %>% 
+  add_predictions(wiggly_mod) %>% 
+  ggplot(aes(x = x, y = y)) + 
+  geom_point() + 
+  geom_line(aes(y = pred), color = "red")
+```
+
+In a case like this, I can also use the handy modelr::gather_predictions function – this is, essentially, a short way of adding predictions for several models to a data frame and then “pivoting” so the result is a tidy, “long” dataset that’s easily plottable.
+```{r}
+train_df %>% 
+  gather_predictions(linear_mod, smooth_mod, wiggly_mod) %>% 
+  mutate(model = fct_inorder(model)) %>% 
+  ggplot(aes(x = x, y = y)) + 
+  geom_point() + 
+  geom_line(aes(y = pred), color = "red") + 
+  facet_wrap(~model)
+```
+
+As a next step in my CV procedure, I’ll compute root mean squared errors (RMSEs) for each model.
+Testing
+```{r}
+
+rmse(linear_mod, test_df)
+##0.707
+rmse(smooth_mod, test_df)
+##0.222
+rmse(wiggly_mod, test_df)
+##0.289
+```
+
+Training
+```{r}
+rmse(smooth_mod, train_df)
+##0.287
+rmse(wiggly_mod, train_df)
+##0.250
+```
+
+## CV using modelr
+Do not have to do the training / testing split by hand, and want to do it multiple times. 
+Crossv_mc takes in a data frame, and by default it gives you 20% in your testing set and 80% in your training set. Gives them each an ID. 
+```{r}
+cv_df = 
+  crossv_mc(nonlin_df, 100) 
+```
+
+One note about rsample, tried to make it energy efficient by not storing the full dataset but just the indices to the OG dataset. Makes it "not play nice" with other programs.
+```{r}
+cv_df =
+  cv_df %>% 
+  mutate(
+    train = map(train, as_tibble),
+    test = map(test, as_tibble))
+```
+
+try fitting a linear model to all of these. 
+```{r}
+cv_df = 
+  cv_df %>% 
+  mutate(linear_mod  = map(train, ~lm(y ~ x, data = .x)),
+         smooth_mod  = map(train, ~mgcv::gam(y ~ s(x), data = .x)),
+         wiggly_mod  = map(train, ~gam(y ~ s(x, k = 30), sp = 10e-6, data = .x))) %>% 
+  mutate(rmse_linear = map2_dbl(linear_mod, test, ~rmse(model = .x, data = .y)),
+         rmse_smooth = map2_dbl(smooth_mod, test, ~rmse(model = .x, data = .y)),
+         rmse_wiggly = map2_dbl(wiggly_mod, test, ~rmse(model = .x, data = .y)))
+```
+
+```{r}
+cv_df %>% 
+  select(starts_with("rmse")) %>% 
+  pivot_longer(
+    everything(),
+    names_to = "model", 
+    values_to = "rmse",
+    names_prefix = "rmse_") %>% 
+  mutate(model = fct_inorder(model)) %>% 
+  ggplot(aes(x = model, y = rmse)) + geom_violin()
+```
+
+Example: Child Growth
+```{r}
+##download data from course website
+child_growth = read_csv("./data/nepalese_children.csv")
+
+child_growth %>% 
+  ggplot(aes(x = weight, y = armc)) + 
+  geom_point(alpha = .5)
+
+```
+
+There may be non-linearity
+```{r}
+child_growth %>% 
+  ggplot(aes(x = weight, y = armc)) + 
+  geom_point(alpha = .5)
+```
+
+Adding a change point term for a piecewise linear model
+```{r}
+child_growth =
+  child_growth %>% 
+  mutate(weight_cp = (weight > 7) * (weight - 7))
+```
+
+Fitting 3 candidate models
+```{r}
+linear_mod    = lm(armc ~ weight, data = child_growth)
+pwl_mod    = lm(armc ~ weight + weight_cp, data = child_growth)
+smooth_mod = gam(armc ~ s(weight), data = child_growth)
+```
+
+Graphing to get visual of goodness to fit
+```{r}
+child_growth %>% 
+  gather_predictions(linear_mod, pwl_mod, smooth_mod) %>% 
+  mutate(model = fct_inorder(model)) %>% 
+  ggplot(aes(x = weight, y = armc)) + 
+  geom_point(alpha = .5) +
+  geom_line(aes(y = pred), color = "red") + 
+  facet_grid(~model)
+```
+Smooth model is best. 

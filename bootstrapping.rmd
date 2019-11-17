@@ -1,0 +1,161 @@
+---
+title: "Bootstrapping"
+author: "Kylie Wheelock Riley"
+date: "11/14/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(p8105.datasets)
+
+set.seed(1)
+```
+ 
+2 simulated datasets. 
+both use simple linear regressions, but they are different.
+
+The variance in dataset 2 is not constant. so the assumptions in linear regression are not kept
+```{r}
+n_samp = 250
+
+sim_df_const = 
+  tibble(
+    x = rnorm(n_samp, 1, 1),
+    error = rnorm(n_samp, 0, 1),
+    y = 2 + 3 * x + error
+  )
+
+sim_df_nonconst = sim_df_const %>% 
+  mutate(
+  error = error * .75 * x,
+  y = 2 + 3 * x + error
+)
+```
+
+fit 2 models
+```{r}
+sim_df_const %>% 
+  lm(y ~ x, data = .) %>% 
+  broom::tidy() %>% 
+  knitr::kable(digits = 3)
+
+sim_df_nonconst %>% 
+  lm(y ~ x, data = .) %>% 
+  broom::tidy() %>% 
+  knitr::kable(digits = 3)
+```
+
+## how can I bootstrap?
+write a function to draw a bootstrap sample based on a dataframe
+```{r}
+##Will still get a dataset of size 250, but each one will be different. 
+##Have a dataset, take a sample from the dataset by pulling 1 observation at a time. 
+
+boot_sample = function(df) {
+  sample_frac(df, replace = TRUE)
+}
+```
+
+```{r}
+boot_sample(df = sim_df_nonconst) %>% 
+  ggplot(aes(x = x, y = y)) +
+  geom_point(alpha = 0.5)
+```
+
+Making a dataframe of the bootstraps
+```{r}
+boot_straps =
+  tibble(stramp_num = 1:1000,
+         strap_sample = rerun(1000, boot_sample(df = sim_df_nonconst))
+         )
+boot_straps
+```
+
+Want to do some kind of analysis.
+Will to look at the slope (maybe intercept?) Should not be the same of the default.  Will fit linear models to each bootstrap output. 
+```{r}
+bootstrap_results = 
+boot_straps %>% 
+  mutate(
+    models = map(strap_sample, ~lm(y ~ x, data = .x)),
+    results = map(models, broom::tidy)
+  ) %>% 
+  select(-strap_sample, -models) %>% 
+  unnest(results)
+```
+
+summarize these results
+```{r}
+bootstrap_results %>% 
+  group_by(term) %>% 
+  summarize(se = sd(estimate))
+```
+
+## Try the modelr package
+just did bootstrapping by hand, but there is a function that can help with it. 
+Do not have to use bootstraping function on modelr, but it is easier and if you do you should know that in the background it is sampling with replacement each time. 
+```{r}
+boot_straps = 
+  sim_df_nonconst %>% 
+  modelr::bootstrap(n = 1000) %>% 
+  mutate(models = map(strap, ~lm(y ~ x, data = .x) ),
+         results = map(models, broom::tidy)) %>% 
+  select(-strap, -models) %>% 
+  unnest(results) %>% 
+  group_by(term) %>% 
+  summarize(boot_se = sd(estimate))
+
+```
+
+## What if your assumptions aren't wrong?
+```{r, include = FALSE}
+sim_df_const %>% 
+  lm(y ~ x, data = .) %>% 
+  broom::tidy()
+
+sim_df_const %>% 
+  mutate(models = map(strap, ~lm(y ~ x, data = .x) ),
+         results = map(models, broom::tidy)
+         ) %>% 
+  ##select(-models) %>% 
+  unnest(results) %>% 
+  group_by(term) %>% 
+  summarize(boot_se = sd(estimate))
+```
+
+## Revisiting airbnb data
+```{r}
+data("nyc_airbnb")
+
+nyc_airbnb = 
+  nyc_airbnb %>% 
+  mutate(stars = review_scores_location / 2) %>% 
+  rename(
+    boro = neighbourhood_group,
+    neighborhood = neighbourhood) %>% 
+  filter(boro != "Staten Island") %>% 
+  select(price, stars, boro, neighborhood, room_type)
+```
+
+```{r}
+nyc_airbnb %>% 
+  ggplot(aes(x = stars, y = price, color = room_type)) + 
+  geom_point() 
+```
+
+re-use the stuff we just did
+```{r}
+nyc_airbnb %>% 
+  filter(boro == "Manhattan") %>% 
+  modelr::bootstrap(n = 1000) %>% 
+  models = map(strap, ~ lm(price ~ stars + room_type, data = .x))
+    results = map(models, broom::tidy)) %>% 
+  select(results) %>% 
+  unnest(results) %>% 
+  filter(term == "stars") %>% 
+  ggplot(aes(x = estimate)) + geom_density()
+  
+```
+
